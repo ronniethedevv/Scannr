@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scannr</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup">
+    <!-- Header -->
+    <header class="header">
+      <div class="header__logo">
+        <img src="../assets/icons/icon-48.png" alt="" width="24" height="24">
+        <h1>Scannr</h1>
+      </div>
+      <div class="header__version">v1.0.0</div>
+    </header>
+
+    <!-- Master Toggle -->
+    <section class="section toggle-section">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">TL Protection</div>
+          <div class="toggle-desc">Scan X/Twitter for scams in real-time</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="master-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Auth Section -->
+    <section class="section" id="auth-section">
+      <div id="auth-signed-out">
+        <p class="auth-desc">Sign in to flag or vouch for tweets</p>
+        <button id="sign-in-btn" class="btn btn--primary">Sign in with X</button>
+      </div>
+      <div id="auth-signed-in" style="display:none;">
+        <div class="auth-user-row">
+          <span class="auth-user-label">Signed in as</span>
+          <span class="auth-user-name" id="auth-user-name"></span>
+        </div>
+        <button id="sign-out-btn" class="btn btn--secondary">Sign out</button>
+      </div>
+    </section>
+
+    <!-- Provider Status -->
+    <section class="section">
+      <h2 class="section-title">Providers</h2>
+      <div id="provider-list">
+        <!-- Populated by popup.js -->
+      </div>
+    </section>
+
+    <!-- Weight Tuning -->
+    <section class="section" id="weights-section" style="display:none;">
+      <h2 class="section-title">Weight Tuning</h2>
+      <div id="weight-sliders">
+        <!-- Populated by popup.js -->
+      </div>
+    </section>
+
+    <!-- About / Disclaimer -->
+    <section class="section about-section">
+      <p class="about-text">Scannr aggregates publicly available reputation signals to help you assess account credibility. Scores reflect data from third-party providers and may be incomplete. Do not use Scannr scores as the basis for financial decisions.</p>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <a href="https://github.com/ronniethedevv/scannr" target="_blank">GitHub</a>
+      <span class="footer-dot">&middot;</span>
+      <span>Scannr</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

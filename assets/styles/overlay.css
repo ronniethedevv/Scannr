@@ -1,0 +1,18 @@
+/*
+ * Scannr — Overlay Styles (Reference)
+ *
+ * These styles are injected into the Shadow DOM by overlay.js.
+ * This file serves as a reference / source of truth for the overlay CSS.
+ * The actual injection happens programmatically in overlay.js > getOverlayStyles().
+ *
+ * Color Palette:
+ *   Brand Blue:   #4C65FF
+ *   Safe Green:   #2ABB7F
+ *   Scam Red:     #E34935
+ *   Warning Orange: #FF9F0A
+ *   BG Dark:      #0C0F1F
+ *   BG Card:      #1a1a2e
+ *   Text Primary: #e0e0e0
+ *   Text Muted:   #888
+ *   Border:       #333
+ */

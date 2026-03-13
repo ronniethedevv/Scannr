@@ -1,0 +1,7 @@
+Replace this directory's contents with actual PNG icons:
+  icon-16.png   (16x16)
+  icon-48.png   (48x48)
+  icon-128.png  (128x128)
+
+Recommended design: Shield icon with a checkmark or eye,
+using the Scannr brand blue (#4C65FF) and dark background (#0C0F1F).

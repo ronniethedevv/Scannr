@@ -1,0 +1,19 @@
+{
+  "name": "scannr",
+  "version": "1.0.0",
+  "description": "Real-time trust firewall for X (Twitter) — flags scams, phishing links, and low-reputation accounts using decentralized reputation data.",
+  "author": "ronniethedevv",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js --watch",
+    "clean": "node -e \"const fs=require('fs');if(fs.existsSync('dist'))fs.rmSync('dist',{recursive:true})\""
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.0"
+  }
+}
