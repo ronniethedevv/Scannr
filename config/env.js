@@ -7,6 +7,6 @@
  */
 
 export const ENV = {
-  SUPABASE_URL: 'https://YOUR_PROJECT.supabase.co',
-  SUPABASE_ANON_KEY: 'YOUR_ANON_KEY',
+  SUPABASE_URL: 'https://oxyfufzlcyywgvfchebr.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94eWZ1ZnpsY3l5d2d2ZmNoZWJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxODc1NDcsImV4cCI6MjA4ODc2MzU0N30.Sbclp2HoJNtSKmBf4jnWSaRl3_0N0gzpDOCfTZCsGsM',
 };

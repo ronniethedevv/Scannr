@@ -17,7 +17,8 @@
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
-    "https://api.ethos.network/*"
+    "https://api.ethos.network/*",
+    "https://oxyfufzlcyywgvfchebr.supabase.co/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",
