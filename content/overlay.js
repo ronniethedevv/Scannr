@@ -488,28 +488,39 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
   disclaimer.textContent = 'Trust scores are informational only. Not financial advice.';
   card.appendChild(disclaimer);
 
-  // -- Flag / Vouch buttons --
+  // -- Flag / Vouch buttons (only for signed-in users) --
   const actionsRow = document.createElement('div');
   actionsRow.className = `${P}-card-actions`;
 
-  const flagBtn = document.createElement('button');
-  flagBtn.className = `${P}-card-btn ${P}-card-btn--flag`;
-  flagBtn.textContent = 'Flag';
-  flagBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    handleSubmission('flag', tweetUrl, flagBtn, vouchBtn);
+  // Check auth state and render buttons or sign-in prompt
+  chrome.runtime.sendMessage({ type: 'scannr:get-user' }, (result) => {
+    if (result?.user) {
+      const flagBtn = document.createElement('button');
+      flagBtn.className = `${P}-card-btn ${P}-card-btn--flag`;
+      flagBtn.textContent = 'Flag';
+      flagBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleSubmission('flag', tweetUrl, flagBtn, vouchBtn);
+      });
+
+      const vouchBtn = document.createElement('button');
+      vouchBtn.className = `${P}-card-btn ${P}-card-btn--vouch`;
+      vouchBtn.textContent = 'Vouch';
+      vouchBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleSubmission('vouch', tweetUrl, vouchBtn, flagBtn);
+      });
+
+      actionsRow.appendChild(flagBtn);
+      actionsRow.appendChild(vouchBtn);
+    } else {
+      const signInHint = document.createElement('span');
+      signInHint.className = `${P}-card-signin-hint`;
+      signInHint.textContent = 'Sign in to flag or vouch';
+      actionsRow.appendChild(signInHint);
+    }
   });
 
-  const vouchBtn = document.createElement('button');
-  vouchBtn.className = `${P}-card-btn ${P}-card-btn--vouch`;
-  vouchBtn.textContent = 'Vouch';
-  vouchBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    handleSubmission('vouch', tweetUrl, vouchBtn, flagBtn);
-  });
-
-  actionsRow.appendChild(flagBtn);
-  actionsRow.appendChild(vouchBtn);
   card.appendChild(actionsRow);
 
   wrapper.appendChild(card);
@@ -880,6 +891,10 @@ function getScannrStyles() {
 
 .${P}-card-btn--done {
   opacity: 0.6; cursor: default;
+}
+
+.${P}-card-signin-hint {
+  color: #71767B; font-size: 12px; text-align: center; width: 100%;
 }
   `;
 }

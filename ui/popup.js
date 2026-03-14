@@ -182,7 +182,7 @@ function renderProviders(healthMap, providerStates = {}) {
 function renderWeightSliders(persistedWeights = {}) {
   weightSliders.innerHTML = '';
 
-  const defaultWeights = { ethos: 0.40, community: 0.50, prints: 0.10 };
+  const defaultWeights = { ethos: 0.35, community: 0.40, prints: 0.25 };
 
   for (const name of PROVIDERS) {
     const weight = persistedWeights[name] ?? defaultWeights[name] ?? 0;

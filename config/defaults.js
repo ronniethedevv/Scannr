@@ -18,9 +18,9 @@ export const CONFIG = {
   // Provider Weights (used in confidence formula, 0–1 scale, must sum to 1)
   // -----------------------------------------------------------------------
   PROVIDER_WEIGHTS: {
-    ethos: 0.40,
-    community: 0.50,
-    prints: 0.10,  // Low weight until API is live; redistributed when disabled
+    ethos: 0.35,
+    community: 0.40,
+    prints: 0.25,  // Low weight until API is live; redistributed when disabled
   },
 
   // -----------------------------------------------------------------------
