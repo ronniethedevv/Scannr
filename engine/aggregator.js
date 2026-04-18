@@ -18,6 +18,7 @@
 import { EthosProvider } from '../providers/ethos.js';
 import { CommunityProvider } from '../providers/community.js';
 import { PrintsProvider } from '../providers/prints.js';
+import { IntuitionProvider } from '../providers/intuition.js';
 import {
   computeProviderConfidence,
   computeReportWeight,
@@ -43,6 +44,7 @@ export function registerProvider(provider) {
 // Register built-in providers
 registerProvider(new EthosProvider());
 registerProvider(new CommunityProvider());
+registerProvider(new IntuitionProvider());
 registerProvider(new PrintsProvider());
 
 // -------------------------------------------------------------------------
@@ -113,7 +115,9 @@ loadTrustStore();
  * @returns {Promise<{confidence, conviction, breakdown, providerResults}>}
  */
 export async function queryReputation(identifier, type) {
+  logger.info(`[Aggregator] queryReputation(identifier="${identifier}", type="${type}")`);
   const activeProviders = Object.values(providers).filter((p) => p.enabled);
+  logger.info(`[Aggregator] Active providers: ${activeProviders.map(p => p.name).join(', ')}`);
 
   if (activeProviders.length === 0) {
     return { confidence: 50, conviction: 'Unverified', breakdown: {}, providerResults: [] };
@@ -153,7 +157,13 @@ export async function queryReputation(identifier, type) {
     };
   });
 
+  // Debug: log each provider's result
+  for (const pr of providerResults) {
+    logger.info(`[Aggregator] Provider "${pr.name}": score=${pr.score}, weight=${pr.weight?.toFixed(3)}, active=${pr.active}, notApplicable=${pr.signals?.notApplicable || false}`);
+  }
+
   const { confidence, conviction, breakdown } = computeProviderConfidence(providerResults);
+  logger.info(`[Aggregator] Final: confidence=${confidence}, conviction="${conviction}", breakdown=${JSON.stringify(breakdown)}`);
   return { confidence, conviction, breakdown, providerResults };
 }
 

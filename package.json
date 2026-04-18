@@ -8,12 +8,16 @@
   "scripts": {
     "build": "node build.js",
     "dev": "node build.js --watch",
-    "clean": "node -e \"const fs=require('fs');if(fs.existsSync('dist'))fs.rmSync('dist',{recursive:true})\""
+    "clean": "node -e \"const fs=require('fs');if(fs.existsSync('dist'))fs.rmSync('dist',{recursive:true})\"",
+    "deploy-predicates": "node scripts/deploy-predicates.mjs"
   },
   "devDependencies": {
+    "dotenv": "^16.6.1",
     "esbuild": "^0.20.0"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.99.0"
+    "@0xintuition/sdk": "^2.0.2",
+    "@supabase/supabase-js": "^2.99.0",
+    "viem": "^2.21.0"
   }
 }

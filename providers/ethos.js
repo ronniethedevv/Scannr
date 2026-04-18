@@ -53,7 +53,7 @@ async function fetchWithRetry(url, init, maxRetries = 2) {
 
 export class EthosProvider extends ReputationProvider {
   constructor() {
-    super('ethos', CONFIG.PROVIDER_WEIGHTS.ethos);
+    super('ethos', 0.30);
   }
 
   /**
@@ -62,7 +62,8 @@ export class EthosProvider extends ReputationProvider {
    */
   async query(identifier, type) {
     if (type !== 'wallet' && type !== 'account') {
-      return { score: 0, signals: {}, raw: null };
+      // Not applicable for link queries — return null score so aggregator skips this provider
+      return { score: null, signals: { notApplicable: true }, raw: null };
     }
 
     const cacheKey = CACHE_PREFIX + identifier.toLowerCase();

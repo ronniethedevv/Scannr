@@ -18,10 +18,10 @@ import { extractLinks } from '../engine/link-checker.js';
 const P = CONFIG.CSS_PREFIX;
 
 // -------------------------------------------------------------------------
-// Shield SVG icon (14px inline, matches OKX's 20px avatar scale)
+// Diamond SVG icon — Scannr brand mark (always purple)
 // -------------------------------------------------------------------------
 
-const SHIELD_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;flex-shrink:0;color:#E7E9EA;"><path d="M12 2L4 6v5c0 5.25 3.4 10.15 8 11.25C16.6 21.15 20 16.25 20 11V6l-8-4z" fill="currentColor" opacity="0.25"/><path d="M12 2L4 6v5c0 5.25 3.4 10.15 8 11.25C16.6 21.15 20 16.25 20 11V6l-8-4z" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>`;
+const DIAMOND_SVG = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="vertical-align:middle;flex-shrink:0;"><path d="M6 0L12 6L6 12L0 6Z" fill="#8B5CF6"/></svg>`;
 
 // -------------------------------------------------------------------------
 // State
@@ -34,6 +34,9 @@ let scannrEnabled = false;
 const activePills = new Map();
 const trustCache = new Map();
 const linkResultsCache = new Map(); // tweetUrl → Array<{ url, result }>
+const latestTrustResults = new Map(); // tweetUrl → latest trustResult (avoids stale closures)
+const authorHandleCache = new Map(); // tweetUrl → "@handle"
+const ethosHandleCache = new Map(); // handle → { score, level, found, ts }
 
 // -------------------------------------------------------------------------
 // Initialization
@@ -73,6 +76,8 @@ function startPillRevalidation() {
     for (const [url, pill] of activePills.entries()) {
       if (!pill.isConnected) {
         activePills.delete(url);
+        latestTrustResults.delete(url);
+        authorHandleCache.delete(url);
       }
     }
   }, CONFIG.VIEWPORT_SYNC_INTERVAL_MS);
@@ -93,6 +98,9 @@ function shutdown() {
   for (const pill of activePills.values()) pill.remove();
   activePills.clear();
   trustCache.clear();
+  latestTrustResults.clear();
+  authorHandleCache.clear();
+  ethosHandleCache.clear();
 
   linkResultsCache.clear();
 
@@ -127,17 +135,21 @@ function getShadowContainer() {
 // -------------------------------------------------------------------------
 
 function handleTweetFound(event) {
-  const { tweetUrl, hasExternalLink, element } = event.detail;
+  const { tweetUrl, authorHandle, hasExternalLink, element } = event.detail;
 
-  // Only show trust pills on tweets that contain external links
-  if (!hasExternalLink) return;
+  // Store author handle for account-level fallback
+  if (authorHandle && authorHandle !== 'unknown') {
+    authorHandleCache.set(tweetUrl, authorHandle);
+  }
 
-  // Run link verification FIRST (local registry, no network calls)
-  const tweetText = element.querySelector(CONFIG.SELECTOR_TWEET_TEXT);
+  // Run link verification (local registry, no network calls)
   let linkResults = [];
-  if (tweetText) {
-    linkResults = extractLinks(tweetText).map(({ url, result }) => ({ url, result }));
-    linkResultsCache.set(tweetUrl, linkResults);
+  if (hasExternalLink) {
+    const tweetText = element.querySelector(CONFIG.SELECTOR_TWEET_TEXT);
+    if (tweetText) {
+      linkResults = extractLinks(tweetText).map(({ url, result }) => ({ url, result }));
+      linkResultsCache.set(tweetUrl, linkResults);
+    }
   }
 
   // Calculate trust from provider data (if cached) + link verification
@@ -175,10 +187,12 @@ function calculateTrustResult(providerData, linkResults) {
   const flaggedLinks = links.filter(l => l.result.status === 'flagged');
   const breakdown = providerData?.breakdown || {};
 
+  logger.info(`[TrustResult] Input: providerData=${providerData ? JSON.stringify({ confidence: providerData.confidence, breakdown: providerData.breakdown }) : 'null'}, links=${links.length} (verified=${verifiedLinks.length}, flagged=${flaggedLinks.length})`);
+
   // --- PRIORITY 1: Any flagged link → Unsafe ---
   if (flaggedLinks.length > 0) {
     return {
-      score: null, level: 'unsafe', label: 'Unsafe', color: '#F4212E',
+      score: null, level: 'unsafe', label: 'Unsafe', color: '#EF4444',
       providerData: providerData || null, linkResults: links,
       breakdown, lastUpdated: providerData?.lastUpdated || null,
     };
@@ -187,7 +201,7 @@ function calculateTrustResult(providerData, linkResults) {
   // --- PRIORITY 2: Any verified link → Verified ---
   if (verifiedLinks.length > 0) {
     return {
-      score: null, level: 'verified', label: 'Verified', color: '#00BA7C',
+      score: null, level: 'verified', label: 'Verified', color: '#22C55E',
       providerData: providerData || null, linkResults: links,
       breakdown, lastUpdated: providerData?.lastUpdated || null,
     };
@@ -198,20 +212,22 @@ function calculateTrustResult(providerData, linkResults) {
   let level, label, color;
 
   if (score >= 70) {
-    level = 'trusted'; label = 'Trusted'; color = '#00BA7C';
+    level = 'trusted'; label = 'Trusted'; color = '#22C55E';
   } else if (score >= 40) {
-    level = 'caution'; label = 'Caution'; color = '#FFD400';
+    level = 'caution'; label = 'Caution'; color = '#EAB308';
   } else if (score > 0) {
-    level = 'low-trust'; label = 'Low Trust'; color = '#F4212E';
+    level = 'low-trust'; label = 'Low Trust'; color = '#EF4444';
   } else {
-    level = 'no-data'; label = 'No Data'; color = '#71767B';
+    level = 'no-data'; label = 'No Data'; color = '#666666';
   }
 
-  return {
+  const result = {
     score, level, label, color,
     providerData: providerData || null, linkResults: links,
     breakdown, lastUpdated: providerData?.lastUpdated || null,
   };
+  logger.info(`[TrustResult] Output: score=${score}, level="${level}", label="${label}"`);
+  return result;
 }
 
 // -------------------------------------------------------------------------
@@ -230,16 +246,28 @@ function findInjectionPoint(tweetEl) {
 }
 
 // -------------------------------------------------------------------------
-// Trust Pill — compact inline indicator (~28px, matches OKX pill sizing)
+// Trust Pill — compact inline indicator (26px, Scannr diamond brand mark)
 // -------------------------------------------------------------------------
 
+function pillBorderTint(level) {
+  switch (level) {
+    case 'trusted': case 'verified': return 'rgba(34, 197, 94, 0.2)';
+    case 'caution': return 'rgba(234, 179, 8, 0.2)';
+    case 'low-trust': case 'unsafe': return 'rgba(239, 68, 68, 0.2)';
+    default: return '#222222';
+  }
+}
+
 function injectTrustPill(tweetEl, tweetUrl, trustResult) {
+  // Always store the latest result so event handlers read fresh data
+  latestTrustResults.set(tweetUrl, trustResult);
+
   if (activePills.has(tweetUrl)) {
     updatePill(tweetUrl, trustResult);
     return;
   }
 
-  const { label, color } = trustResult;
+  const { label, color, level } = trustResult;
 
   const { target, position } = findInjectionPoint(tweetEl);
 
@@ -249,31 +277,42 @@ function injectTrustPill(tweetEl, tweetUrl, trustResult) {
   pill.setAttribute('tabindex', '0');
   pill.setAttribute('aria-label', `Scannr: ${label}`);
   pill.dataset.scannrUrl = tweetUrl;
+  pill.dataset.level = level;
 
-  pill.innerHTML = `${SHIELD_SVG} <span style="color:#E7E9EA;font-weight:500;">Trust:</span> <span style="color:${color};font-weight:600;">${label}</span>`;
+  const borderTint = pillBorderTint(level);
+  const isNoData = level === 'no-data';
+
+  pill.innerHTML = `${DIAMOND_SVG} <span style="color:#888888;font-weight:500;font-size:12px;">Trust:</span> <span style="color:${color};font-weight:600;font-size:12px;">${label}</span>`;
   pill.style.cssText = `
     display:inline-flex;align-items:center;gap:4px;
     width:fit-content;max-width:fit-content;align-self:flex-start;
-    height:28px;padding:4px 10px;border-radius:9999px;
+    height:26px;padding:2px 10px 2px 8px;border-radius:9999px;
     margin:4px 0 4px 0;
-    font-size:13px;cursor:pointer;
-    background:#202327;border:1px solid rgba(255,255,255,0.08);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:12px;cursor:pointer;
+    background:#0A0A0A;border:1px solid ${borderTint};
+    font-family:'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif;
     white-space:nowrap;user-select:none;line-height:1;
-    transition:opacity 0.15s ease;
+    transition:border-color 0.15s ease,box-shadow 0.15s ease,opacity 180ms ease;
     box-sizing:border-box;
+    opacity:0.4;
   `;
 
-  // Hover: show detail card
+  // Hover: purple glow + show detail card
   let hoverTimer = null;
   pill.addEventListener('mouseenter', () => {
-    pill.style.opacity = '0.85';
+    pill.style.borderColor = '#8B5CF6';
+    pill.style.boxShadow = '0 0 20px rgba(139,92,246,0.1)';
+    pill.style.opacity = '1';
     hoverTimer = setTimeout(() => {
-      openDetailCard(tweetUrl, trustResult, pill);
+      openDetailCard(tweetUrl, latestTrustResults.get(tweetUrl) || trustResult, pill);
     }, 300);
   });
   pill.addEventListener('mouseleave', () => {
-    pill.style.opacity = '1';
+    pill.style.borderColor = borderTint;
+    pill.style.boxShadow = 'none';
+    if (!pill.classList.contains(`${P}-pill--active`)) {
+      pill.style.opacity = '0.4';
+    }
     if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
   });
 
@@ -282,14 +321,14 @@ function injectTrustPill(tweetEl, tweetUrl, trustResult) {
     e.stopPropagation();
     e.preventDefault();
     if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
-    openDetailCard(tweetUrl, trustResult, pill);
+    openDetailCard(tweetUrl, latestTrustResults.get(tweetUrl) || trustResult, pill);
   });
 
   pill.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.stopPropagation();
       e.preventDefault();
-      openDetailCard(tweetUrl, trustResult, pill);
+      openDetailCard(tweetUrl, latestTrustResults.get(tweetUrl) || trustResult, pill);
     }
   });
 
@@ -313,9 +352,17 @@ function updatePill(tweetUrl, trustResult) {
   const pill = activePills.get(tweetUrl);
   if (!pill) return;
 
-  const { label, color } = trustResult;
-  pill.innerHTML = `${SHIELD_SVG} <span style="color:#E7E9EA;font-weight:500;">Trust:</span> <span style="color:${color};font-weight:600;">${label}</span>`;
+  const { label, color, level } = trustResult;
+  const borderTint = pillBorderTint(level);
+  const isNoData = level === 'no-data';
+
+  pill.innerHTML = `${DIAMOND_SVG} <span style="color:#888888;font-weight:500;font-size:12px;">Trust:</span> <span style="color:${color};font-weight:600;font-size:12px;">${label}</span>`;
   pill.setAttribute('aria-label', `Scannr: ${label}`);
+  pill.dataset.level = level;
+  pill.style.borderColor = borderTint;
+  if (!pill.classList.contains(`${P}-pill--active`)) {
+    pill.style.opacity = '0.4';
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -335,24 +382,25 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
   if (!container) return;
 
   // Everything reads from the single computed trustResult
-  const { score, level, label, color: scoreColor, breakdown, linkResults: cardLinks, lastUpdated } = trustResult;
+  const { score, level, label, color: scoreColor, breakdown, linkResults: cardLinks, lastUpdated, accountFallback } = trustResult;
   const isLinkBased = level === 'verified' || level === 'unsafe';
+  const isAccountFallback = !!accountFallback;
 
   // Wrapper (for mouse-enter/leave tracking on the card itself)
   const wrapper = document.createElement('div');
   wrapper.className = `${P}-card-wrapper`;
 
-  // Card — force dark background with inline style as fallback
+  // Card
   const card = document.createElement('div');
   card.className = `${P}-detail-card`;
-  card.style.background = '#1D1F23';
-  card.style.color = '#E7E9EA';
+  card.style.background = '#1A1A1A';
+  card.style.color = '#F5F5F5';
   card.addEventListener('click', (e) => e.stopPropagation());
 
-  // -- Header --
+  // -- Header (uppercase label) --
   const titleDiv = document.createElement('div');
   titleDiv.className = `${P}-card-title`;
-  titleDiv.textContent = isLinkBased ? 'Scannr Link Check' : 'Scannr Trust Score';
+  titleDiv.textContent = isAccountFallback ? 'SCANNR ACCOUNT CHECK' : isLinkBased ? 'SCANNR LINK CHECK' : 'SCANNR TRUST SCORE';
   card.appendChild(titleDiv);
 
   // -- Score bar + number --
@@ -376,62 +424,217 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
 
   const scoreNum = document.createElement('span');
   scoreNum.className = `${P}-card-score-num`;
-  scoreNum.style.color = scoreColor;
 
   if (isLinkBased) {
+    scoreNum.style.color = scoreColor;
     scoreNum.textContent = label;
   } else {
-    scoreNum.textContent = `${Math.round(score || 0)}/100`;
-    scoreNum.style.color = '#E7E9EA';
+    scoreNum.innerHTML = `<span style="color:${scoreColor}">${Math.round(score || 0)}</span><span style="color:#555555"> / 100</span>`;
   }
 
   scoreRow.appendChild(scoreBar);
   scoreRow.appendChild(scoreNum);
   card.appendChild(scoreRow);
 
-  // -- Provider rows --
-  const providers = [
-    { name: 'Ethos', key: 'ethos', desc: 'vouches' },
-    { name: 'Community', key: 'community', desc: 'flags & vouches' },
-    { name: 'Prints', key: 'prints', desc: 'Awaiting API' },
-  ];
+  // -- Author Ethos row (Amendment 3) --
+  {
+    const authorHandle = authorHandleCache.get(tweetUrl);
+    if (authorHandle && authorHandle !== 'unknown') {
+      const cleanHandle = authorHandle.replace(/^@/, '').toLowerCase();
+      const ethosData = ethosHandleCache.get(cleanHandle);
+      const authorRow = document.createElement('div');
+      authorRow.className = `${P}-card-author-row`;
 
-  for (const prov of providers) {
-    const provRow = document.createElement('div');
-    provRow.className = `${P}-card-provider`;
+      const authorLabel = document.createElement('span');
+      authorLabel.className = `${P}-card-author-label`;
+      authorLabel.textContent = authorHandle.startsWith('@') ? authorHandle : `@${authorHandle}`;
 
-    const provData = breakdown[prov.key];
-    const isActive = provData && provData.available !== false;
-    const isPrints = prov.key === 'prints';
+      const authorScore = document.createElement('span');
+      authorScore.className = `${P}-card-author-score`;
+      if (ethosData && ethosData.found && ethosData.score != null) {
+        authorScore.innerHTML = `Ethos: <span style="font-family:'JetBrains Mono',monospace;color:#A78BFA;">${ethosData.score}</span>`;
+      } else {
+        authorScore.textContent = 'Ethos: —';
+        authorScore.style.color = '#555555';
+      }
 
-    const dot = document.createElement('span');
-    dot.className = `${P}-card-dot`;
-    dot.style.color = (isPrints || !isActive) ? '#71767B' : '#00BA7C';
-    dot.textContent = (isPrints || !isActive) ? '\u25CB' : '\u25CF';
+      const ethosLink = document.createElement('a');
+      ethosLink.className = `${P}-card-author-ethos-link`;
+      ethosLink.href = `https://app.ethos.network/profile/x/${encodeURIComponent(cleanHandle)}`;
+      ethosLink.target = '_blank';
+      ethosLink.rel = 'noopener';
+      ethosLink.textContent = '\u2197';
 
-    const provLabel = document.createElement('span');
-    provLabel.className = `${P}-card-prov-name`;
-    provLabel.textContent = prov.name;
-
-    const provInfo = document.createElement('span');
-    provInfo.className = `${P}-card-prov-info`;
-    if (isPrints) {
-      provInfo.textContent = 'Awaiting API';
-    } else if (isActive && provData.count !== undefined) {
-      provInfo.textContent = `${provData.count} ${prov.desc}`;
-    } else if (isActive && provData.score !== undefined) {
-      provInfo.textContent = `Score: ${provData.score}`;
-    } else {
-      provInfo.textContent = isActive ? 'Connected' : 'No data';
+      authorRow.appendChild(authorLabel);
+      authorRow.appendChild(authorScore);
+      authorRow.appendChild(ethosLink);
+      card.appendChild(authorRow);
     }
-
-    provRow.appendChild(dot);
-    provRow.appendChild(provLabel);
-    provRow.appendChild(provInfo);
-    card.appendChild(provRow);
   }
 
-  // -- Links section (from local registry verification) --
+  // -- Data source rows --
+
+  if (isAccountFallback) {
+    // Account-level Ethos fallback
+    const accountRow = document.createElement('div');
+    accountRow.className = `${P}-card-provider`;
+    const dot1 = document.createElement('div');
+    dot1.className = `${P}-card-dot`;
+    dot1.style.background = '#666666';
+    const name1 = document.createElement('span');
+    name1.className = `${P}-card-prov-name`;
+    name1.textContent = 'Account';
+    const info1 = document.createElement('span');
+    info1.className = `${P}-card-prov-info`;
+    info1.textContent = accountFallback.handle.startsWith('@') ? accountFallback.handle : `@${accountFallback.handle}`;
+    accountRow.appendChild(dot1);
+    accountRow.appendChild(name1);
+    accountRow.appendChild(info1);
+    card.appendChild(accountRow);
+
+    const ethosRow = document.createElement('div');
+    ethosRow.className = `${P}-card-provider`;
+    const dot2 = document.createElement('div');
+    dot2.className = `${P}-card-dot`;
+    dot2.style.background = '#EAB308';
+    const name2 = document.createElement('span');
+    name2.className = `${P}-card-prov-name`;
+    name2.textContent = 'Ethos';
+    const info2 = document.createElement('span');
+    info2.className = `${P}-card-prov-info`;
+    info2.style.fontFamily = "'JetBrains Mono','SF Mono',monospace";
+    info2.textContent = `${accountFallback.ethosScore} \u00B7 ${accountFallback.ethosLevel || 'unknown'}`;
+    ethosRow.appendChild(dot2);
+    ethosRow.appendChild(name2);
+    ethosRow.appendChild(info2);
+    card.appendChild(ethosRow);
+
+    // Caption
+    const caption = document.createElement('div');
+    caption.className = `${P}-card-caption`;
+    caption.textContent = 'No tweet-level data available. Showing account reputation.';
+    card.appendChild(caption);
+  } else {
+    // Tweet-level breakdown — Community + Links rows
+
+    // Community row
+    {
+      const communityRow = document.createElement('div');
+      communityRow.className = `${P}-card-provider`;
+      const communityData = breakdown.community;
+      const hasReports = communityData && communityData.available !== false;
+      const signals = trustResult?.providerData?.providerResults?.find(p => p.name === 'community')?.signals;
+      const flags = signals?.flags || 0;
+      const vouches = signals?.vouches || 0;
+
+      const dot = document.createElement('div');
+      dot.className = `${P}-card-dot`;
+      dot.style.background = (hasReports && (flags > 0 || vouches > 0)) ? '#22C55E' : '#666666';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = `${P}-card-prov-name`;
+      nameEl.textContent = 'Community';
+
+      const infoEl = document.createElement('span');
+      infoEl.className = `${P}-card-prov-info`;
+      if (hasReports && (flags > 0 || vouches > 0)) {
+        const parts = [];
+        if (vouches > 0) parts.push(`${vouches} vouch${vouches !== 1 ? 'es' : ''}`);
+        if (flags > 0) parts.push(`${flags} flag${flags !== 1 ? 's' : ''}`);
+        infoEl.textContent = parts.join(', ');
+      } else {
+        infoEl.textContent = 'No reports yet';
+      }
+
+      communityRow.appendChild(dot);
+      communityRow.appendChild(nameEl);
+      communityRow.appendChild(infoEl);
+      card.appendChild(communityRow);
+    }
+
+    // On-chain row (Intuition attestations)
+    {
+      const onchainRow = document.createElement('div');
+      onchainRow.className = `${P}-card-provider`;
+      const intuitionSignals = trustResult?.providerData?.providerResults
+        ?.find(p => p.name === 'intuition')?.signals;
+      const iVouches = intuitionSignals?.vouches || 0;
+      const iFlags = intuitionSignals?.flags || 0;
+      const iAtomId = intuitionSignals?.atomId;
+      const hasOnchain = iVouches > 0 || iFlags > 0;
+
+      const dot = document.createElement('div');
+      dot.className = `${P}-card-dot`;
+      dot.style.background = hasOnchain ? '#8B5CF6' : '#666666';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = `${P}-card-prov-name`;
+      nameEl.textContent = 'On-chain';
+
+      const infoEl = document.createElement('span');
+      infoEl.className = `${P}-card-prov-info`;
+      if (hasOnchain) {
+        const parts = [];
+        if (iVouches > 0) parts.push(`${iVouches} vouch${iVouches !== 1 ? 'es' : ''}`);
+        if (iFlags > 0) parts.push(`${iFlags} flag${iFlags !== 1 ? 's' : ''}`);
+        infoEl.textContent = parts.join(', ');
+      } else {
+        infoEl.textContent = 'No attestations';
+      }
+
+      onchainRow.appendChild(dot);
+      onchainRow.appendChild(nameEl);
+      onchainRow.appendChild(infoEl);
+
+      // Click to view on Intuition Explorer
+      if (iAtomId) {
+        onchainRow.style.cursor = 'pointer';
+        onchainRow.addEventListener('click', (e) => {
+          e.stopPropagation();
+          window.open(`https://testnet.explorer.intuition.systems/atom/${iAtomId}`, '_blank');
+        });
+      }
+
+      card.appendChild(onchainRow);
+    }
+
+    // Links row
+    {
+      const linksRow = document.createElement('div');
+      linksRow.className = `${P}-card-provider`;
+      const hasLinks = cardLinks && cardLinks.length > 0;
+      const verifiedCount = hasLinks ? cardLinks.filter(l => l.result.status === 'verified').length : 0;
+      const flaggedCount = hasLinks ? cardLinks.filter(l => l.result.status === 'flagged').length : 0;
+      const unknownCount = hasLinks ? cardLinks.length - verifiedCount - flaggedCount : 0;
+
+      const dot = document.createElement('div');
+      dot.className = `${P}-card-dot`;
+      dot.style.background = hasLinks ? '#22C55E' : '#666666';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = `${P}-card-prov-name`;
+      nameEl.textContent = 'Links';
+
+      const infoEl = document.createElement('span');
+      infoEl.className = `${P}-card-prov-info`;
+      if (!hasLinks) {
+        infoEl.textContent = 'No links';
+      } else {
+        const parts = [];
+        if (verifiedCount > 0) parts.push(`${verifiedCount} verified`);
+        if (flaggedCount > 0) parts.push(`${flaggedCount} flagged`);
+        if (unknownCount > 0) parts.push(`${unknownCount} unknown`);
+        infoEl.textContent = parts.join(', ');
+      }
+
+      linksRow.appendChild(dot);
+      linksRow.appendChild(nameEl);
+      linksRow.appendChild(infoEl);
+      card.appendChild(linksRow);
+    }
+  }
+
+  // -- Links detail section (expanded per-link breakdown) --
   if (cardLinks && cardLinks.length > 0) {
     const linkDivider = document.createElement('div');
     linkDivider.className = `${P}-card-divider`;
@@ -439,7 +642,7 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
 
     const linksTitle = document.createElement('div');
     linksTitle.className = `${P}-card-links-title`;
-    linksTitle.textContent = 'Links';
+    linksTitle.textContent = 'Link Details';
     card.appendChild(linksTitle);
 
     for (const { url, result } of cardLinks) {
@@ -454,11 +657,11 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
       linkStatus.className = `${P}-card-link-status`;
 
       if (result.status === 'verified') {
-        linkStatus.innerHTML = `<span style="color:#00BA7C;">\u2713 Verified</span> <span style="color:#71767B;">\u00B7 ${escapeHtml(result.source)}</span>`;
+        linkStatus.innerHTML = `<span style="color:#22C55E;">\u2713 Verified</span> <span style="color:#555555;">\u00B7 ${escapeHtml(result.source)}</span>`;
       } else if (result.status === 'flagged') {
-        linkStatus.innerHTML = `<span style="color:#F4212E;">\u26A0 ${escapeHtml(result.reason)}</span> <span style="color:#71767B;">\u00B7 ${escapeHtml(result.source)}</span>`;
+        linkStatus.innerHTML = `<span style="color:#EF4444;">\u26A0 ${escapeHtml(result.reason)}</span> <span style="color:#555555;">\u00B7 ${escapeHtml(result.source)}</span>`;
       } else {
-        linkStatus.innerHTML = `<span style="color:#71767B;">Unknown</span>`;
+        linkStatus.innerHTML = `<span style="color:#666666;">Unknown</span>`;
       }
 
       linkRow.appendChild(linkDomain);
@@ -495,24 +698,34 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
   // Check auth state and render buttons or sign-in prompt
   chrome.runtime.sendMessage({ type: 'scannr:get-user' }, (result) => {
     if (result?.user) {
-      const flagBtn = document.createElement('button');
-      flagBtn.className = `${P}-card-btn ${P}-card-btn--flag`;
-      flagBtn.textContent = 'Flag';
-      flagBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        handleSubmission('flag', tweetUrl, flagBtn, vouchBtn);
-      });
-
+      // Vouch button — immediate submit
       const vouchBtn = document.createElement('button');
       vouchBtn.className = `${P}-card-btn ${P}-card-btn--vouch`;
       vouchBtn.textContent = 'Vouch';
       vouchBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        handleSubmission('vouch', tweetUrl, vouchBtn, flagBtn);
+        cancelHideTimer();
+        handleSubmission('vouch', tweetUrl, 'vouch', vouchBtn, actionsRow);
       });
-
-      actionsRow.appendChild(flagBtn);
       actionsRow.appendChild(vouchBtn);
+
+      // Flag category buttons — each submits immediately with its category
+      const flagCategories = [
+        { label: 'False Info', category: 'false_info' },
+        { label: 'Hacked Account', category: 'hacked_account' },
+        { label: 'Wrong Link', category: 'wrong_link' },
+      ];
+      for (const { label, category } of flagCategories) {
+        const flagBtn = document.createElement('button');
+        flagBtn.className = `${P}-card-btn ${P}-card-btn--flag`;
+        flagBtn.textContent = label;
+        flagBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          cancelHideTimer();
+          handleSubmission('flag', tweetUrl, category, flagBtn, actionsRow);
+        });
+        actionsRow.appendChild(flagBtn);
+      }
     } else {
       const signInHint = document.createElement('span');
       signInHint.className = `${P}-card-signin-hint`;
@@ -522,6 +735,21 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
   });
 
   card.appendChild(actionsRow);
+
+  // -- Community reports button --
+  const communityBtnRow = document.createElement('div');
+  communityBtnRow.className = `${P}-card-community-row`;
+
+  const communityBtn = document.createElement('button');
+  communityBtn.className = `${P}-card-community-btn`;
+  communityBtn.textContent = 'See community reports';
+  communityBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cancelHideTimer();
+    openCommunityCard(tweetUrl, card);
+  });
+  communityBtnRow.appendChild(communityBtn);
+  card.appendChild(communityBtnRow);
 
   wrapper.appendChild(card);
   container.appendChild(wrapper);
@@ -547,11 +775,13 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
   anchorEl.addEventListener('mouseenter', cancelHideTimer);
   anchorEl.addEventListener('mouseleave', startHideTimer);
 
-  // Click outside (on the page)
+  // Click outside — check shadow host (closed shadow DOM hides internals from composedPath)
   const clickOutside = (e) => {
-    if (!wrapper.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
-      closeDetailCard();
+    const path = e.composedPath();
+    if (path.includes(shadowHost) || path.includes(anchorEl)) {
+      return; // Click was inside our shadow host or on the pill
     }
+    closeDetailCard();
   };
   setTimeout(() => document.addEventListener('click', clickOutside, { capture: true }), 0);
 
@@ -564,6 +794,10 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
   // Scroll dismiss
   const scrollHandler = () => closeDetailCard();
   window.addEventListener('scroll', scrollHandler, { once: true, passive: true });
+
+  // Keep pill fully visible while card is open
+  anchorEl.classList.add(`${P}-pill--active`);
+  anchorEl.style.opacity = '1';
 
   activeDetailCard = {
     tweetUrl,
@@ -581,13 +815,160 @@ function openDetailCard(tweetUrl, trustResult, anchorEl) {
   };
 }
 
+let activeCommunityCard = null;
+
+function closeCommunityCard() {
+  if (activeCommunityCard) {
+    activeCommunityCard.remove();
+    activeCommunityCard = null;
+  }
+}
+
 function closeDetailCard() {
+  closeCommunityCard();
   if (activeDetailCard) {
+    // Restore pill to faint state
+    activeDetailCard.anchorEl.classList.remove(`${P}-pill--active`);
+    activeDetailCard.anchorEl.style.opacity = '0.4';
     activeDetailCard.cleanup();
     activeDetailCard.wrapper.remove();
     activeDetailCard = null;
   }
   if (cardHideTimer) { clearTimeout(cardHideTimer); cardHideTimer = null; }
+}
+
+/**
+ * Opens a community reports card beside the primary detail card.
+ * Fetches all submissions for the given tweet URL and displays them.
+ */
+async function openCommunityCard(tweetUrl, primaryCard) {
+  // If already open for this URL, close it (toggle)
+  if (activeCommunityCard) {
+    closeCommunityCard();
+    return;
+  }
+
+  const container = getShadowContainer();
+  if (!container) return;
+
+  const communityCard = document.createElement('div');
+  communityCard.className = `${P}-community-card`;
+  communityCard.style.background = '#1A1A1A';
+  communityCard.style.color = '#F5F5F5';
+  communityCard.addEventListener('click', (e) => e.stopPropagation());
+
+  // Keep primary card open when hovering community card
+  communityCard.addEventListener('mouseenter', () => {
+    if (cardHideTimer) { clearTimeout(cardHideTimer); cardHideTimer = null; }
+  });
+  communityCard.addEventListener('mouseleave', () => {
+    if (cardHideTimer) clearTimeout(cardHideTimer);
+    cardHideTimer = setTimeout(() => closeDetailCard(), 300);
+  });
+
+  // Header
+  const header = document.createElement('div');
+  header.className = `${P}-community-header`;
+  header.textContent = 'COMMUNITY REPORTS';
+  communityCard.appendChild(header);
+
+  // Loading state
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = `${P}-community-loading`;
+  loadingDiv.textContent = 'Loading...';
+  communityCard.appendChild(loadingDiv);
+
+  // Position beside the primary card
+  const primaryRect = primaryCard.getBoundingClientRect();
+  const cardWidth = 280;
+  const gap = 8;
+
+  // Try right side first, fall back to left
+  let left = primaryRect.right + gap;
+  if (left + cardWidth > window.innerWidth - 8) {
+    left = primaryRect.left - cardWidth - gap;
+  }
+  if (left < 8) left = 8;
+
+  communityCard.style.top = `${primaryRect.top}px`;
+  communityCard.style.left = `${left}px`;
+
+  container.appendChild(communityCard);
+  activeCommunityCard = communityCard;
+
+  // Fetch community submissions
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'scannr:get-community-submissions',
+      payload: { tweetUrl },
+    });
+
+    // Remove loading
+    loadingDiv.remove();
+
+    if (response?.error) {
+      const errDiv = document.createElement('div');
+      errDiv.className = `${P}-community-empty`;
+      errDiv.textContent = response.error;
+      communityCard.appendChild(errDiv);
+      return;
+    }
+
+    const submissions = response?.submissions || [];
+    if (submissions.length === 0) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = `${P}-community-empty`;
+      emptyDiv.textContent = 'No community reports yet';
+      communityCard.appendChild(emptyDiv);
+      return;
+    }
+
+    for (const sub of submissions) {
+      const row = document.createElement('div');
+      row.className = `${P}-community-row`;
+
+      const icon = document.createElement('span');
+      icon.className = `${P}-community-icon`;
+      icon.style.color = sub.type === 'flag' ? '#EF4444' : '#22C55E';
+      icon.textContent = sub.type === 'flag' ? '\u26A0' : '\u2713';
+
+      const info = document.createElement('div');
+      info.className = `${P}-community-info`;
+
+      const handle = document.createElement('span');
+      handle.className = `${P}-community-handle`;
+      handle.textContent = sub.reporter_handle ? `@${sub.reporter_handle}` : 'Anonymous';
+
+      const meta = document.createElement('span');
+      meta.className = `${P}-community-meta`;
+      const typeLabel = sub.type === 'flag' ? 'Flagged' : 'Vouched as Legit';
+      const catLabel = sub.category ? ` \u00B7 ${sub.category}` : '';
+      const ethosSpan = sub.reporter_ethos_score != null
+        ? ` <span style="font-family:'JetBrains Mono',monospace;color:#A78BFA;">\u00B7 Ethos: ${sub.reporter_ethos_score}</span>`
+        : '';
+      meta.innerHTML = `<span style="color:${sub.type === 'flag' ? '#EF4444' : '#22C55E'}">${escapeHtml(typeLabel)}</span>${escapeHtml(catLabel)}${ethosSpan} <span style="color:#555555;">\u00B7 ${timeAgo(sub.created_at)}</span>`;
+
+      info.appendChild(handle);
+      info.appendChild(meta);
+
+      // "View Ethos" link
+      if (sub.reporter_handle) {
+        const ethosLink = document.createElement('a');
+        ethosLink.className = `${P}-community-ethos-link`;
+        ethosLink.href = `https://app.ethos.network/profile/x/${encodeURIComponent(sub.reporter_handle)}`;
+        ethosLink.target = '_blank';
+        ethosLink.rel = 'noopener';
+        ethosLink.textContent = 'View Ethos \u2197';
+        info.appendChild(ethosLink);
+      }
+
+      row.appendChild(icon);
+      row.appendChild(info);
+      communityCard.appendChild(row);
+    }
+  } catch {
+    loadingDiv.textContent = 'Failed to load';
+  }
 }
 
 function positionCard(card, anchorEl) {
@@ -628,27 +1009,30 @@ function escapeHtml(str) {
 // Submission Handler (Flag / Vouch)
 // -------------------------------------------------------------------------
 
-async function handleSubmission(type, tweetUrl, activeBtn, otherBtn) {
-  activeBtn.disabled = true;
-  otherBtn.disabled = true;
+async function handleSubmission(type, tweetUrl, category, activeBtn, actionsRow) {
+  // Disable all buttons in the actions row
+  const allBtns = actionsRow.querySelectorAll('button');
+  allBtns.forEach(btn => { btn.disabled = true; });
+  const origText = activeBtn.textContent;
   activeBtn.textContent = type === 'flag' ? 'Flagging...' : 'Vouching...';
 
   try {
     const response = await chrome.runtime.sendMessage({
       type: 'scannr:submit-report',
-      payload: { reportType: type, targetUrl: tweetUrl },
+      payload: { reportType: type, targetUrl: tweetUrl, category },
     });
 
     if (response?.error) {
       if (response.error === 'Not signed in') {
         activeBtn.textContent = 'Sign in first';
+      } else if (response.error === 'Already submitted') {
+        activeBtn.textContent = 'Already submitted';
       } else {
         activeBtn.textContent = 'Error';
       }
       setTimeout(() => {
-        activeBtn.textContent = type === 'flag' ? 'Flag' : 'Vouch';
-        activeBtn.disabled = false;
-        otherBtn.disabled = false;
+        activeBtn.textContent = origText;
+        allBtns.forEach(btn => { btn.disabled = false; });
       }, 2000);
       return;
     }
@@ -656,9 +1040,8 @@ async function handleSubmission(type, tweetUrl, activeBtn, otherBtn) {
     activeBtn.textContent = type === 'flag' ? 'Flagged' : 'Vouched';
     activeBtn.classList.add(`${P}-card-btn--done`);
   } catch {
-    activeBtn.textContent = type === 'flag' ? 'Flag' : 'Vouch';
-    activeBtn.disabled = false;
-    otherBtn.disabled = false;
+    activeBtn.textContent = origText;
+    allBtns.forEach(btn => { btn.disabled = false; });
   }
 }
 
@@ -727,9 +1110,109 @@ async function requestReputation(tweetUrl) {
     if (response?.result) {
       trustCache.set(tweetUrl, response.result);
       updatePillsForUrl(tweetUrl, response.result);
+
+      // Check if result has meaningful tweet-level data
+      const hasTweetData = hasMeaningfulTweetData(response.result, tweetUrl);
+      if (!hasTweetData) {
+        // No tweet-level data — try account-level Ethos fallback
+        requestEthosFallback(tweetUrl);
+      }
+    } else {
+      // No result at all — try fallback
+      requestEthosFallback(tweetUrl);
     }
   } catch {
     // Background may not be ready
+  }
+}
+
+/**
+ * Check whether reputation result has meaningful tweet-level data
+ * (community submissions or link verdicts).
+ */
+function hasMeaningfulTweetData(result, tweetUrl) {
+  // Check community submissions
+  const communitySignals = result?.providerResults?.find(p => p.name === 'community')?.signals;
+  if (communitySignals && (communitySignals.flags > 0 || communitySignals.vouches > 0)) {
+    return true;
+  }
+  // Check link results
+  const links = linkResultsCache.get(tweetUrl) || [];
+  if (links.some(l => l.result.status === 'verified' || l.result.status === 'flagged')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Account-level Ethos fallback — query by author handle when no tweet-level data exists.
+ */
+async function requestEthosFallback(tweetUrl) {
+  const handle = authorHandleCache.get(tweetUrl);
+  if (!handle || handle === 'unknown') return;
+
+  const cleanHandle = handle.replace(/^@/, '').toLowerCase();
+
+  // Check local cache (avoid redundant messages for same author)
+  const cached = ethosHandleCache.get(cleanHandle);
+  if (cached && Date.now() - cached.ts < 30 * 60 * 1000) {
+    applyEthosFallback(tweetUrl, handle, cached);
+    return;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'scannr:query-ethos-handle',
+      payload: { handle },
+    });
+
+    if (response) {
+      const entry = { ...response, ts: Date.now() };
+      ethosHandleCache.set(cleanHandle, entry);
+      applyEthosFallback(tweetUrl, handle, entry);
+    }
+  } catch {
+    // Service worker not ready
+  }
+}
+
+/**
+ * Apply Ethos account-level data as a fallback trust result.
+ * - Low Ethos score (< 400 or untrusted/questionable) → "Caution" (yellow)
+ * - No Ethos profile (404) → "No Data" (gray)
+ * - Normal/high Ethos score → "No Data" (gray) — one source isn't enough for green
+ */
+function applyEthosFallback(tweetUrl, handle, ethosData) {
+  if (!ethosData.found) return; // No profile → stay "No Data"
+
+  const isLowScore = ethosData.score != null && ethosData.score < 400;
+  const isLowLevel = ethosData.level === 'untrusted' || ethosData.level === 'questionable';
+
+  if (!isLowScore && !isLowLevel) return; // Normal score → stay "No Data"
+
+  // Low score — show Caution pill with account-level data
+  const trustResult = {
+    score: Math.round((ethosData.score / 2800) * 100),
+    level: 'caution',
+    label: 'Caution',
+    color: '#EAB308',
+    providerData: null,
+    linkResults: [],
+    breakdown: {},
+    lastUpdated: null,
+    accountFallback: {
+      handle,
+      ethosScore: ethosData.score,
+      ethosLevel: ethosData.level,
+    },
+  };
+
+  latestTrustResults.set(tweetUrl, trustResult);
+
+  // Update pill if it exists
+  const pill = activePills.get(tweetUrl);
+  if (pill) {
+    updatePill(tweetUrl, trustResult);
   }
 }
 
@@ -754,7 +1237,28 @@ function timeAgo(dateStr) {
 
 function getScannrStyles() {
   return `
-/* Force dark color scheme for entire shadow DOM */
+/* Font faces — loaded from extension bundle */
+@font-face {
+  font-family: 'DM Sans';
+  font-weight: 400;
+  src: url(chrome-extension://${chrome.runtime.id}/assets/fonts/DMSans-Regular.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-weight: 500;
+  src: url(chrome-extension://${chrome.runtime.id}/assets/fonts/DMSans-Medium.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-weight: 600;
+  src: url(chrome-extension://${chrome.runtime.id}/assets/fonts/DMSans-SemiBold.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 500;
+  src: url(chrome-extension://${chrome.runtime.id}/assets/fonts/JetBrainsMono-Medium.woff2) format('woff2');
+}
+
 :host {
   color-scheme: dark;
 }
@@ -765,34 +1269,45 @@ function getScannrStyles() {
   z-index: 100000; pointer-events: none;
 }
 
-/* Detail card — X-style hover card */
+/* Animations */
+@keyframes ${P}-card-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ${P}-fade-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Detail Card ──────────────────────────────── */
+
 .${P}-detail-card {
   position: fixed;
-  width: 300px;
-  background: #1D1F23;
+  width: 320px;
+  background: #1A1A1A;
   color-scheme: dark;
-  border: 1px solid rgb(47, 51, 54);
-  border-radius: 16px;
+  border: 1px solid #222222;
+  border-radius: 12px;
   padding: 16px;
-  color: #E7E9EA;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #F5F5F5;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 13px;
-  line-height: 1.4;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  line-height: 1.5;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px #222222;
   pointer-events: auto;
   animation: ${P}-card-in 0.15s ease;
   z-index: 100001;
 }
 
-@keyframes ${P}-card-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
-}
-
-/* Title */
+/* Title — uppercase label */
 .${P}-card-title {
-  font-size: 15px; font-weight: 700; margin-bottom: 10px;
-  color: #E7E9EA;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #555555;
+  margin-bottom: 10px;
 }
 
 /* Score row */
@@ -803,33 +1318,75 @@ function getScannrStyles() {
 
 .${P}-card-score-bar {
   flex: 1; height: 4px; border-radius: 2px;
-  background: rgba(255,255,255,0.1); overflow: hidden;
+  background: #141414; overflow: hidden;
 }
 
 .${P}-card-score-fill {
   height: 100%; border-radius: 2px;
-  transition: width 0.3s ease;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .${P}-card-score-num {
-  font-size: 14px; font-weight: 700; color: #E7E9EA;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 14px; font-weight: 600;
   white-space: nowrap;
 }
 
-/* Provider rows */
-.${P}-card-provider {
+/* Author Ethos row */
+.${P}-card-author-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 4px 0; font-size: 13px;
+  padding: 6px 0; font-size: 12px;
+  border-bottom: 1px solid #222222;
+  margin-bottom: 4px;
+}
+.${P}-card-author-label {
+  font-weight: 600; color: #F5F5F5;
+}
+.${P}-card-author-score {
+  color: #888888; font-size: 12px;
+  margin-left: auto;
+}
+.${P}-card-author-ethos-link {
+  color: #A78BFA; text-decoration: none; font-size: 12px;
+}
+.${P}-card-author-ethos-link:hover {
+  text-decoration: underline;
 }
 
-.${P}-card-dot { font-size: 10px; width: 14px; text-align: center; }
-.${P}-card-prov-name { font-weight: 600; color: #E7E9EA; min-width: 65px; }
-.${P}-card-prov-info { color: #71767B; }
+/* Data rows (Community, Links, Account, Ethos) */
+.${P}-card-provider {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 13px;
+}
 
-/* Links section */
+.${P}-card-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.${P}-card-prov-name {
+  font-weight: 500; color: #888888; min-width: 80px;
+}
+
+.${P}-card-prov-info {
+  color: #F5F5F5;
+}
+
+/* Account fallback caption */
+.${P}-card-caption {
+  font-size: 11px;
+  color: #555555;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+/* Links detail section */
 .${P}-card-links-title {
-  font-size: 13px; font-weight: 600; color: #E7E9EA;
+  font-size: 11px; font-weight: 500; color: #555555;
   margin-bottom: 6px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .${P}-card-link-row {
@@ -839,62 +1396,177 @@ function getScannrStyles() {
 }
 
 .${P}-card-link-domain {
-  color: #1D9BF0; font-weight: 500;
+  color: #8B5CF6; font-weight: 500;
   overflow: hidden; text-overflow: ellipsis;
   max-width: 120px; white-space: nowrap;
 }
 
 .${P}-card-link-status {
-  color: #71767B; white-space: nowrap;
+  color: #555555; white-space: nowrap;
 }
 
 /* Timestamp */
 .${P}-card-timestamp {
-  font-size: 12px; color: #71767B;
+  font-size: 11px; color: #555555;
   margin-top: 10px; margin-bottom: 6px;
 }
 
 /* Divider */
 .${P}-card-divider {
-  height: 1px; background: rgb(47, 51, 54);
-  margin: 8px 0;
+  height: 1px; background: #222222;
+  margin: 12px 0;
 }
 
 /* Disclaimer */
 .${P}-card-disclaimer {
-  font-size: 12px; color: #71767B;
+  font-size: 11px; color: #555555;
   margin-bottom: 6px; line-height: 1.4;
+  text-align: center;
 }
 
-/* Action buttons (Flag / Vouch) */
+/* Action buttons */
 .${P}-card-actions {
-  display: flex; gap: 8px; margin-top: 8px;
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }
 
 .${P}-card-btn {
-  flex: 1; padding: 6px 0; border: none; border-radius: 8px;
-  font-size: 13px; font-weight: 600; cursor: pointer;
-  transition: opacity 0.15s;
-  font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #222222;
+  border-radius: 8px;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px; font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  transition: all 0.15s ease;
 }
 
-.${P}-card-btn:hover { opacity: 0.85; }
+.${P}-card-btn:active { transform: scale(0.97); }
 .${P}-card-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .${P}-card-btn--flag {
-  background: rgba(244, 33, 46, 0.15); color: #F4212E;
+  color: #EF4444;
+}
+.${P}-card-btn--flag:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
 }
 
 .${P}-card-btn--vouch {
-  background: rgba(0, 186, 124, 0.15); color: #00BA7C;
+  color: #22C55E;
+}
+.${P}-card-btn--vouch:hover {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
 }
 
 .${P}-card-btn--done {
-  opacity: 0.6; cursor: default;
+  opacity: 0.5; cursor: default; pointer-events: none;
+}
+.${P}-card-btn--flag.${P}-card-btn--done {
+  background: rgba(239, 68, 68, 0.08);
+}
+.${P}-card-btn--vouch.${P}-card-btn--done {
+  background: rgba(34, 197, 94, 0.08);
 }
 
 .${P}-card-signin-hint {
-  color: #71767B; font-size: 12px; text-align: center; width: 100%;
+  color: #555555; font-size: 12px; text-align: center; width: 100%;
+}
+
+/* Community reports button */
+.${P}-card-community-row {
+  margin-top: 8px;
+}
+
+.${P}-card-community-btn {
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px;
+  width: 100%; padding: 8px;
+  border: 1px solid #222222;
+  border-radius: 8px; background: transparent;
+  color: #A78BFA;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: all 0.15s ease;
+}
+.${P}-card-community-btn:hover {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+/* ─── Community Card ───────────────────────────── */
+
+.${P}-community-card {
+  position: fixed; width: 280px;
+  background: #1A1A1A; color: #F5F5F5;
+  border: 1px solid #222222; border-radius: 12px;
+  padding: 16px; pointer-events: auto;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px; line-height: 1.5;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px #222222;
+  animation: ${P}-card-in 0.15s ease;
+  z-index: 100002;
+  max-height: 400px; overflow-y: auto;
+  color-scheme: dark;
+}
+
+.${P}-community-card::-webkit-scrollbar { width: 4px; }
+.${P}-community-card::-webkit-scrollbar-track { background: transparent; }
+.${P}-community-card::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.25);
+  border-radius: 2px;
+}
+
+.${P}-community-header {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: #555555;
+  margin-bottom: 10px;
+}
+
+.${P}-community-loading,
+.${P}-community-empty {
+  font-size: 12px; color: #555555;
+  text-align: center; padding: 12px 0;
+}
+
+.${P}-community-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid #222222;
+}
+.${P}-community-row:last-child { border-bottom: none; }
+
+.${P}-community-icon {
+  font-size: 13px; flex-shrink: 0; margin-top: 1px;
+}
+
+.${P}-community-info {
+  display: flex; flex-direction: column; min-width: 0;
+}
+
+.${P}-community-handle {
+  font-size: 13px; font-weight: 600; color: #F5F5F5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.${P}-community-meta {
+  font-size: 12px; color: #888888; margin-top: 2px;
+}
+
+.${P}-community-ethos-link {
+  color: #A78BFA;
+  font-size: 11px;
+  text-decoration: none;
+  display: inline-block;
+  margin-top: 2px;
+}
+.${P}-community-ethos-link:hover {
+  text-decoration: underline;
+  color: #8B5CF6;
 }
   `;
 }

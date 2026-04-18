@@ -8,6 +8,9 @@
  *   1. ESM  — background service worker (Chrome MV3 supports module workers)
  *   2. IIFE — content scripts + popup (no ES module support in these contexts)
  *
+ * The Privy auth page is hosted externally (scannr-auth-page/) and deployed
+ * separately to Vercel.
+ *
  * Usage:
  *   node build.js          — one-shot build
  *   node build.js --watch  — watch mode for development
@@ -36,6 +39,7 @@ const staticFiles = [
 // Static directories to copy
 const staticDirs = [
   ['assets/icons', 'assets/icons'],
+  ['assets/fonts', 'assets/fonts'],
 ];
 
 function copyFile(src, dest) {
@@ -108,18 +112,14 @@ const contentBuild = {
 async function build() {
   copyStatics();
 
+  const builds = [backgroundBuild, contentBuild];
+
   if (isWatch) {
-    const [bgCtx, contentCtx] = await Promise.all([
-      esbuild.context(backgroundBuild),
-      esbuild.context(contentBuild),
-    ]);
-    await Promise.all([bgCtx.watch(), contentCtx.watch()]);
+    const contexts = await Promise.all(builds.map(b => esbuild.context(b)));
+    await Promise.all(contexts.map(c => c.watch()));
     console.log('[build] Watching for changes...');
   } else {
-    await Promise.all([
-      esbuild.build(backgroundBuild),
-      esbuild.build(contentBuild),
-    ]);
+    await Promise.all(builds.map(b => esbuild.build(b)));
     console.log('[build] Done!');
   }
 }

@@ -40,6 +40,7 @@ export function getSupabase() {
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false, // no URL-based auth in extensions
+        flowType: 'pkce', // PKCE flow — avoids state JWT length issues with X OAuth
       },
     });
   }

@@ -10,9 +10,10 @@
  *     user_id     uuid REFERENCES auth.users(id) NOT NULL,
  *     target_url  text NOT NULL,
  *     type        text CHECK (type IN ('flag', 'vouch')) NOT NULL,
- *     category    text,
- *     note        text,
- *     created_at  timestamptz DEFAULT now()
+ *     category         text,
+ *     note             text,
+ *     reporter_handle  text,
+ *     created_at       timestamptz DEFAULT now()
  *   )
  *
  * RLS policies:
@@ -24,6 +25,7 @@
 import { getSupabase } from './supabase.js';
 import { createRateLimiter } from '../utils/rate-limiter.js';
 import { logger } from '../utils/logger.js';
+import { ENV } from '../config/env.js';
 
 // Anti-abuse: max 10 submissions per 5 minutes per client
 const submissionLimiter = createRateLimiter(10, 5 * 60_000);
@@ -56,6 +58,19 @@ export async function submitReport(type, targetUrl, category = null, note = null
 
   submissionLimiter.record();
 
+  // Read profile from users table (x_handle, ethos_score)
+  const { data: profile } = await supabase
+    .from('users')
+    .select('x_handle, ethos_score')
+    .eq('id', user.id)
+    .single();
+
+  // Fallback to auth metadata if users table row doesn't exist yet
+  const reporterHandle = profile?.x_handle
+    || user.user_metadata?.preferred_username
+    || user.user_metadata?.user_name
+    || null;
+
   const { data, error } = await supabase
     .from('submissions')
     .insert({
@@ -64,16 +79,67 @@ export async function submitReport(type, targetUrl, category = null, note = null
       type,
       category,
       note,
+      reporter_handle: reporterHandle,
+      reporter_ethos_score: profile?.ethos_score || null,
     })
     .select()
     .single();
 
   if (error) {
-    logger.warn('Submission failed:', error);
+    logger.warn('Submission failed:', JSON.stringify(error));
+    if (error.code === '23505') {
+      return { data: null, error: 'Already submitted' };
+    }
     return { data: null, error: error.message };
   }
 
   logger.info(`Submitted ${type} for ${targetUrl}`);
+
+  // On-chain attestation via Edge Function (best-effort, non-blocking)
+  // Uses the SUPABASE session token — NOT Privy. These are separate auth systems.
+  try {
+    const { data: { session: sbSession }, error: sessErr } = await supabase.auth.getSession();
+
+    if (sessErr || !sbSession?.access_token) {
+      console.warn('[Scannr] No Supabase session for attestation:', sessErr?.message || 'no token');
+      return { data, error: null };
+    }
+
+    // Log token type (ES256 is current Supabase signing algorithm for this project)
+    const tokenAlg = JSON.parse(atob(sbSession.access_token.split('.')[0])).alg;
+    console.log('[Scannr] Token alg:', tokenAlg);
+
+    const predicateKey = type === 'vouch'
+      ? 'is_trustworthy'
+      : (category === 'hacked_account' ? 'is_hacked_account'
+        : category === 'wrong_link' ? 'is_wrong_link'
+        : 'is_false_info');
+
+    console.log('[Scannr] Calling attestation Edge Function — predicateKey:', predicateKey);
+
+    fetch(ENV.ATTESTATION_FUNCTION_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': ENV.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${sbSession.access_token}`,
+      },
+      body: JSON.stringify({
+        tweetUrl: targetUrl,
+        predicateKey,
+        userId: user.id,
+      }),
+    })
+      .then(res => res.json().then(body => {
+        console.log('[Scannr] Attestation response:', res.status, body);
+      }))
+      .catch(err => {
+        console.error('[Scannr] Attestation fetch error:', err.message);
+      });
+  } catch (err) {
+    console.error('[Scannr] Attestation setup error:', err.message);
+  }
+
   return { data, error: null };
 }
 

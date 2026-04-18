@@ -8,22 +8,11 @@
  *   - Scanned tweet count
  */
 
-const PROVIDERS = ['ethos', 'community', 'prints'];
-
-const PROVIDER_DESCRIPTIONS = {
-  ethos: 'Vouch-based reputation scores (0\u20132800)',
-  community: 'Community flags & vouches',
-  prints: 'Composable reputation aggregation (coming soon)',
-};
-
 // -------------------------------------------------------------------------
 // DOM References
 // -------------------------------------------------------------------------
 
 const masterToggle = document.getElementById('master-toggle');
-const providerList = document.getElementById('provider-list');
-const weightsSection = document.getElementById('weights-section');
-const weightSliders = document.getElementById('weight-sliders');
 const authSignedOut = document.getElementById('auth-signed-out');
 const authSignedIn = document.getElementById('auth-signed-in');
 const authUserName = document.getElementById('auth-user-name');
@@ -55,31 +44,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Auto-refresh status while popup is open and scannr is enabled
   if (status?.enabled) startStatusPolling();
 
-  // Load persisted provider toggle states
-  const providerStates = await loadProviderStates();
-
-  // Provider cards
-  renderProviders(status?.providerHealth || {}, providerStates);
-
-  // Health check (async, update when ready)
-  sendMessage({ type: 'scannr:health-check' }).then((health) => {
-    if (health?.health) renderProviders(health.health, providerStates);
-  });
-
-  // Weight sliders — load persisted weights
-  const persistedWeights = await loadPersistedWeights();
-  renderWeightSliders(persistedWeights);
+  // Reputation source selector
+  await initReputationSource();
 
   // Auth state
   await refreshAuthUI();
 
   signInBtn.addEventListener('click', async () => {
+    console.log('[Scannr Popup] Sign in button clicked');
     signInBtn.disabled = true;
     signInBtn.textContent = 'Signing in...';
     const result = await sendMessage({ type: 'scannr:sign-in' });
+    console.log('[Scannr Popup] Sign in response:', JSON.stringify(result));
     if (result?.error) {
-      signInBtn.textContent = 'Sign in with X';
+      signInBtn.textContent = result.error === 'Sign-in was cancelled'
+        ? 'Sign in with X'
+        : `Error: ${result.error}`;
       signInBtn.disabled = false;
+      if (result.error !== 'Sign-in was cancelled') {
+        setTimeout(() => {
+          signInBtn.textContent = 'Sign in with X';
+        }, 3000);
+      }
     } else {
       await refreshAuthUI();
     }
@@ -91,132 +77,68 @@ document.addEventListener('DOMContentLoaded', async () => {
     await refreshAuthUI();
     signOutBtn.disabled = false;
   });
+
+  // Wallet UI
+  await refreshWalletUI();
+
+  document.getElementById('setup-wallet-btn')?.addEventListener('click', () => {
+    sendMessage({ type: 'scannr:open-wallet-setup' });
+    window.close();
+  });
+
+  document.getElementById('disconnect-wallet-btn')?.addEventListener('click', async () => {
+    await sendMessage({ type: 'scannr:disconnect-wallet' });
+    await refreshWalletUI();
+  });
+
+  document.getElementById('wallet-copy-btn')?.addEventListener('click', async () => {
+    const result = await sendMessage({ type: 'scannr:get-wallet' });
+    if (result?.address) {
+      await navigator.clipboard.writeText(result.address);
+      const btn = document.getElementById('wallet-copy-btn');
+      btn.classList.add('wallet-copy-btn--copied');
+      setTimeout(() => btn.classList.remove('wallet-copy-btn--copied'), 1500);
+    }
+  });
+
+  // Community activity feed
+  loadActivityFeed();
 });
 
-async function loadProviderStates() {
-  const states = {};
-  for (const name of PROVIDERS) {
-    try {
-      const result = await chrome.storage.local.get(`scannr_provider_${name}`);
-      states[name] = result[`scannr_provider_${name}`];
-    } catch { /* ignore */ }
-  }
-  return states;
-}
+// -------------------------------------------------------------------------
+// Reputation Source Selector
+// -------------------------------------------------------------------------
 
-async function loadPersistedWeights() {
-  const weights = {};
-  for (const name of PROVIDERS) {
-    try {
-      const result = await chrome.storage.local.get(`scannr_weight_${name}`);
-      if (typeof result[`scannr_weight_${name}`] === 'number') {
-        weights[name] = result[`scannr_weight_${name}`];
+async function initReputationSource() {
+  const stored = await chrome.storage.local.get('reputation_source');
+  const current = stored.reputation_source || 'ethos';
+
+  const radios = document.querySelectorAll('input[name="reputation_source"]');
+  for (const radio of radios) {
+    radio.checked = radio.value === current;
+    radio.addEventListener('change', () => {
+      if (radio.checked) {
+        chrome.storage.local.set({ reputation_source: radio.value });
       }
-    } catch { /* ignore */ }
+    });
   }
-  return weights;
+
+  // Show Ethos health status
+  sendMessage({ type: 'scannr:health-check' }).then((result) => {
+    const statusEl = document.getElementById('rep-status-ethos');
+    if (statusEl && result?.health) {
+      const isOnline = result.health.ethos === true;
+      statusEl.textContent = isOnline ? 'Online' : 'Offline';
+      statusEl.className = `rep-source-option__status ${isOnline ? 'rep-source-option__status--online' : 'rep-source-option__status--offline'}`;
+    }
+  });
 }
 
 // -------------------------------------------------------------------------
 // Rendering
 // -------------------------------------------------------------------------
 
-function renderProviders(healthMap, providerStates = {}) {
-  providerList.innerHTML = '';
-
-  for (const name of PROVIDERS) {
-    const card = document.createElement('div');
-    card.className = 'provider-card';
-
-    const isHealthy = healthMap[name] === true;
-    const isPrints = name === 'prints';
-
-    // Determine checked state: use persisted state if available, else default
-    const isChecked = isPrints ? false : (providerStates[name] !== undefined ? providerStates[name] : true);
-
-    const statusClass = isPrints
-      ? 'provider-card__status--disabled'
-      : isHealthy
-        ? 'provider-card__status--online'
-        : 'provider-card__status--offline';
-
-    const statusLabel = isPrints ? 'Coming soon' : isHealthy ? 'Online' : 'Offline';
-    const description = PROVIDER_DESCRIPTIONS[name] || '';
-
-    card.innerHTML = `
-      <div class="provider-card__info">
-        <div class="provider-card__status ${statusClass}" title="${statusLabel}"></div>
-        <div>
-          <span class="provider-card__name">${name}</span>
-          <div class="provider-card__desc">${description}</div>
-        </div>
-      </div>
-      <div class="provider-card__toggle">
-        <label class="switch" style="width:36px;height:20px;">
-          <input type="checkbox" data-provider="${name}" ${isChecked ? 'checked' : ''} ${isPrints ? 'disabled' : ''}>
-          <span class="slider" style="border-radius:20px;"></span>
-        </label>
-      </div>
-    `;
-
-    // Fix slider knob size for smaller toggle
-    const slider = card.querySelector('.slider');
-    if (slider) {
-      slider.style.setProperty('--knob-size', '14px');
-    }
-
-    const toggle = card.querySelector('input[type="checkbox"]');
-    if (toggle && !isPrints) {
-      toggle.addEventListener('change', () => {
-        sendMessage({
-          type: 'scannr:set-provider',
-          payload: { name, enabled: toggle.checked },
-        });
-      });
-    }
-
-    providerList.appendChild(card);
-  }
-}
-
-function renderWeightSliders(persistedWeights = {}) {
-  weightSliders.innerHTML = '';
-
-  const defaultWeights = { ethos: 0.35, community: 0.40, prints: 0.25 };
-
-  for (const name of PROVIDERS) {
-    const weight = persistedWeights[name] ?? defaultWeights[name] ?? 0;
-
-    const row = document.createElement('div');
-    row.className = 'weight-row';
-    row.innerHTML = `
-      <div class="weight-row__header">
-        <span class="weight-row__label">${name}</span>
-        <span class="weight-row__value" id="weight-val-${name}">${Math.round(weight * 100)}%</span>
-      </div>
-      <input type="range" min="0" max="100" value="${Math.round(weight * 100)}" data-provider="${name}">
-    `;
-
-    const slider = row.querySelector('input[type="range"]');
-    const valueDisplay = row.querySelector(`#weight-val-${name}`);
-
-    slider.addEventListener('input', () => {
-      valueDisplay.textContent = `${slider.value}%`;
-    });
-
-    slider.addEventListener('change', () => {
-      sendMessage({
-        type: 'scannr:set-weight',
-        payload: { name, weight: parseInt(slider.value) / 100 },
-      });
-    });
-
-    weightSliders.appendChild(row);
-  }
-}
-
 function updateUIState(enabled, tweetCount = 0) {
-  weightsSection.style.display = enabled ? 'block' : 'none';
 
   // Update scanned tweets indicator
   let statsEl = document.getElementById('scan-stats');
@@ -250,17 +172,97 @@ async function refreshAuthUI() {
   if (user) {
     authSignedOut.style.display = 'none';
     authSignedIn.style.display = 'block';
-    // Use X handle from user_metadata, fallback to email
-    const handle = user.user_metadata?.preferred_username
+
+    // Fetch profile from users table
+    const profileResult = await sendMessage({ type: 'scannr:get-user-profile' });
+    const profile = profileResult?.profile;
+
+    // Display handle — prefer users table, fall back to auth metadata
+    const handle = profile?.x_handle
+      || user.user_metadata?.preferred_username
       || user.user_metadata?.user_name
       || user.email
       || 'User';
     authUserName.textContent = `@${handle}`;
+
+    // Display Ethos score + submission count
+    const statsEl = document.getElementById('auth-profile-stats');
+    if (statsEl) {
+      const parts = [];
+      if (profile?.ethos_score != null) {
+        parts.push(`<span class="stat-label">Ethos:</span> <span class="stat-value stat-value--ethos">${profile.ethos_score}</span>`);
+      }
+      // Fetch submission count from activity feed data
+      const subsResult = await sendMessage({
+        type: 'scannr:get-recent-submissions',
+        payload: { limit: 100 },
+      });
+      const subCount = subsResult?.submissions?.length || 0;
+      parts.push(`<span class="stat-label">Submissions:</span> <span class="stat-value">${subCount}</span>`);
+      statsEl.innerHTML = parts.join('<span style="color:#333;"> · </span>');
+    }
   } else {
     authSignedOut.style.display = 'block';
     authSignedIn.style.display = 'none';
     signInBtn.textContent = 'Sign in with X';
     signInBtn.disabled = false;
+  }
+}
+
+// -------------------------------------------------------------------------
+// Wallet UI
+// -------------------------------------------------------------------------
+
+async function refreshWalletUI() {
+  const walletSection = document.getElementById('wallet-section');
+  const walletNotConnected = document.getElementById('wallet-not-connected');
+  const walletConnected = document.getElementById('wallet-connected');
+  const walletAddressEl = document.getElementById('wallet-address');
+  const walletBalanceEl = document.getElementById('wallet-balance');
+
+  // Only show wallet section if user is signed in
+  const userResult = await sendMessage({ type: 'scannr:get-user' });
+  if (!userResult?.user) {
+    walletSection.style.display = 'none';
+    return;
+  }
+
+  walletSection.style.display = 'block';
+
+  const result = await sendMessage({ type: 'scannr:get-wallet' });
+  const address = result?.address;
+
+  if (address) {
+    walletNotConnected.style.display = 'none';
+    walletConnected.style.display = 'block';
+    walletAddressEl.textContent = `${address.slice(0, 6)}...${address.slice(-4)}`;
+
+    // Fetch balance async
+    sendMessage({ type: 'scannr:get-wallet-balance' }).then((balResult) => {
+      if (balResult?.balance != null) {
+        const bal = parseFloat(balResult.balance);
+        walletBalanceEl.textContent = `${bal.toFixed(2)} TRUST`;
+      } else {
+        walletBalanceEl.textContent = '';
+      }
+    });
+
+    // Check if prefund failed due to treasury depletion
+    chrome.storage.local.get('scannr_prefund_status').then((stored) => {
+      if (stored.scannr_prefund_status === 'treasury_depleted') {
+        let hint = document.getElementById('wallet-prefund-hint');
+        if (!hint) {
+          hint = document.createElement('div');
+          hint.id = 'wallet-prefund-hint';
+          hint.className = 'wallet-hint';
+          hint.innerHTML = 'Free credits unavailable. Get TRUST at <a href="https://bridge.intuition.systems" target="_blank">bridge.intuition.systems</a>';
+          walletConnected.appendChild(hint);
+        }
+      }
+    });
+  } else {
+    walletNotConnected.style.display = 'block';
+    walletConnected.style.display = 'none';
   }
 }
 
@@ -299,4 +301,87 @@ function stopStatusPolling() {
     clearInterval(statusPollTimer);
     statusPollTimer = null;
   }
+}
+
+// -------------------------------------------------------------------------
+// Community Activity Feed
+// -------------------------------------------------------------------------
+
+async function loadActivityFeed() {
+  const feed = document.getElementById('activity-feed');
+  const result = await sendMessage({
+    type: 'scannr:get-recent-submissions',
+    payload: { limit: 20 },
+  });
+
+  if (result?.error === 'Not signed in') {
+    feed.innerHTML = '<div class="activity-feed__empty">Sign in to see your activity</div>';
+    return;
+  }
+  if (result?.error) {
+    feed.innerHTML = '<div class="activity-feed__empty">Could not load activity</div>';
+    return;
+  }
+
+  const submissions = result?.submissions || [];
+  if (submissions.length === 0) {
+    feed.innerHTML = '<div class="activity-feed__empty">No activity yet</div>';
+    return;
+  }
+
+  feed.innerHTML = '';
+  for (const sub of submissions) {
+    const row = document.createElement('div');
+    row.className = 'activity-row';
+
+    const isFlag = sub.type === 'flag';
+    const icon = isFlag ? '\uD83D\uDEA9' : '\u2713';
+    const color = isFlag ? '#EF4444' : '#22C55E';
+    const handle = extractHandle(sub.target_url);
+    const action = isFlag ? 'Flagged' : 'Vouched';
+    const category = sub.category ? ` as ${sub.category}` : '';
+    const ago = timeAgo(sub.created_at);
+
+    row.innerHTML = `
+      <span class="activity-row__icon" style="color:${color}">${icon}</span>
+      <div class="activity-row__content">
+        <div class="activity-row__target">Tweet by <span class="activity-row__handle">${escapeHtml(handle)}</span></div>
+        <div class="activity-row__meta"><span style="color:${color}">${action}${escapeHtml(category)}</span> <span class="activity-row__time">&middot; ${ago}</span></div>
+      </div>
+    `;
+
+    feed.appendChild(row);
+  }
+}
+
+function extractHandle(targetUrl) {
+  if (!targetUrl) return 'unknown';
+  try {
+    const url = new URL(targetUrl);
+    const parts = url.pathname.split('/').filter(Boolean);
+    return parts.length > 0 ? `@${parts[0]}` : 'unknown';
+  } catch {
+    // Not a URL — treat as handle
+    return targetUrl.startsWith('@') ? targetUrl : `@${targetUrl}`;
+  }
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diff = Math.max(0, now - then);
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }

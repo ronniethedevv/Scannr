@@ -15,19 +15,11 @@ export const CONFIG = {
   PRINTS_API_BASE_URL: '', // Placeholder — set when API goes live
 
   // -----------------------------------------------------------------------
-  // Provider Weights (used in confidence formula, 0–1 scale, must sum to 1)
-  // -----------------------------------------------------------------------
-  PROVIDER_WEIGHTS: {
-    ethos: 0.35,
-    community: 0.40,
-    prints: 0.25,  // Low weight until API is live; redistributed when disabled
-  },
-
-  // -----------------------------------------------------------------------
   // Feature Flags
   // -----------------------------------------------------------------------
   ETHOS_ENABLED: true,
   COMMUNITY_ENABLED: true,
+  INTUITION_ENABLED: true,
   PRINTS_ENABLED: false,  // Flip to true once Fluent Prints API is available
 
   // -----------------------------------------------------------------------
@@ -63,6 +55,7 @@ export const CONFIG = {
   RATE_LIMIT_WINDOW_MS: 60_000,       // 1-minute sliding window
   RATE_LIMIT_MAX_CALLS_ETHOS: 30,     // Max Ethos API calls per window
   RATE_LIMIT_MAX_CALLS_COMMUNITY: 60, // Max Community (Supabase) calls per window
+  RATE_LIMIT_MAX_CALLS_INTUITION: 30, // Max Intuition GraphQL calls per window
   RATE_LIMIT_MAX_CALLS_PRINTS: 30,    // Max Prints API calls per window
 
   // -----------------------------------------------------------------------

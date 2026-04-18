@@ -16,13 +16,12 @@
  */
 
 import { ReputationProvider } from './provider-interface.js';
-import { CONFIG } from '../config/defaults.js';
 import { getSubmissionsForUrl, getSubmissionsBatch } from '../api/submissions.js';
 import { logger } from '../utils/logger.js';
 
 export class CommunityProvider extends ReputationProvider {
   constructor() {
-    super('community', CONFIG.PROVIDER_WEIGHTS.community);
+    super('community', 0.35);
   }
 
   /**
@@ -30,8 +29,10 @@ export class CommunityProvider extends ReputationProvider {
    */
   async query(identifier, type) {
     try {
+      logger.info(`[Community] query(identifier="${identifier}", type="${type}")`);
       const { flags, vouches } = await getSubmissionsForUrl(identifier);
       const score = this._computeScore(flags, vouches);
+      logger.info(`[Community] result: flags=${flags}, vouches=${vouches}, score=${score}`);
 
       return {
         score,

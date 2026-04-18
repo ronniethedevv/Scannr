@@ -158,6 +158,13 @@ export function computeProviderConfidence(providerResults) {
   let weightedSum = 0;
   const breakdown = {};
 
+  // Mark providers that returned null score (not applicable for this query type)
+  for (const provider of providerResults) {
+    if (!active.includes(provider) && provider.signals?.notApplicable) {
+      breakdown[provider.name] = { score: null, available: false, notApplicable: true };
+    }
+  }
+
   for (const provider of active) {
     const normalizedWeight = provider.weight / totalWeight;
     const contribution = provider.score * normalizedWeight;

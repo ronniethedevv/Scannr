@@ -41,7 +41,7 @@ const rateLimiter = createRateLimiter(
 
 export class PrintsProvider extends ReputationProvider {
   constructor() {
-    super('prints', CONFIG.PROVIDER_WEIGHTS.prints);
+    super('prints', 0.15);
     // Respect the feature flag — disabled until API is live
     this.enabled = CONFIG.PRINTS_ENABLED;
   }

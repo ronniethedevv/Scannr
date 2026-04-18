@@ -17,8 +17,15 @@
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
+    "https://api.x.com/*",
+    "https://api.twitter.com/*",
+    "https://*.supabase.co/*",
     "https://api.ethos.network/*",
-    "https://oxyfufzlcyywgvfchebr.supabase.co/*"
+    "https://auth.privy.io/*",
+    "https://testnet.rpc.intuition.systems/*",
+    "https://testnet.api.intuition.systems/*",
+    "https://rpc.intuition.systems/*",
+    "https://api.intuition.systems/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",
@@ -46,5 +53,12 @@
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none';"
+  },
+  "web_accessible_resources": [{
+    "resources": ["assets/fonts/*"],
+    "matches": ["https://x.com/*", "https://twitter.com/*"]
+  }],
+  "externally_connectable": {
+    "matches": ["https://scannr-auth.vercel.app/*"]
   }
 }

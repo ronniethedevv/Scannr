@@ -1,0 +1,21 @@
+{
+  "name": "scannr-auth-page",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@privy-io/react-auth": "^1.95.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "vite": "^5.4.0"
+  }
+}

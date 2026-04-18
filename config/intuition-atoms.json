@@ -1,0 +1,28 @@
+{
+  "is_trustworthy": {
+    "uri": "scannr://predicate/is-trustworthy",
+    "atomId": "0x56e25f24db1101a52a906d93da0e6056227d3a48e33be08fdb645989fa49330f"
+  },
+  "is_false_info": {
+    "uri": "scannr://predicate/is-false-info",
+    "atomId": "0x9c0a6b0ada694a217c79ca5b6ada08d316b3d447b5688554323dac895cd57fd5"
+  },
+  "is_hacked_account": {
+    "uri": "scannr://predicate/is-hacked-account",
+    "atomId": "0x22cb78371e7bcf49cbc65faca4912e210e2bed35ccc6d2023fa6ce93b51b36fb"
+  },
+  "is_wrong_link": {
+    "uri": "scannr://predicate/is-wrong-link",
+    "atomId": "0x3448e5c9189781c876738c1aad022b5a6d8556c6a32e06173bf5fe60e27136d6"
+  },
+  "crypto_twitter": {
+    "uri": "scannr://context/crypto-twitter",
+    "atomId": "0x302dfc8697dbbdf64d359cafc4d0a825571e82f42ee4f11b638e5b7f23f2c307"
+  },
+  "_meta": {
+    "network": "testnet",
+    "chainId": 13579,
+    "multivault": "0x2Ece8D4dEdcB9918A398528f3fa4688b1d2CAB91",
+    "deployedAt": "2026-04-10T08:40:13.210Z"
+  }
+}
