@@ -1,12 +1,18 @@
 /**
- * Scannr — Intuition Network Provider
+ * Scannr — Intuition Network Provider (v2)
  *
  * On-chain reputation provider that reads attestation data from
- * Intuition Network via GraphQL. Counts vouch (is_trustworthy)
- * vs flag (is_false_info, is_hacked_account, is_wrong_link) triples
- * for each tweet URL atom.
+ * Intuition Network via the Hasura GraphQL API at testnet.intuition.sh.
  *
- * Score calculation (same formula as CommunityProvider):
+ * Schema migration (April 2026):
+ *   - Old endpoint testnet.api.intuition.systems/graphql (retired) →
+ *     new endpoint testnet.intuition.sh/v1/graphql
+ *   - Atom IDs are bytes32 hex strings (e.g. "0x46810c72..."), not numerics
+ *   - Lookup atoms by label (exact match on the tweet URL)
+ *   - Triple signal = count of triples per predicate category
+ *     (vault/share weighting not exposed in current schema)
+ *
+ * Score calculation:
  *   - Net = vouches - flags
  *   - Total = vouches + flags
  *   - If total == 0 → score 50 (neutral)
@@ -60,7 +66,7 @@ export class IntuitionProvider extends ReputationProvider {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          query: '{ atoms(limit: 1) { items { id } } }',
+          query: '{ atoms(limit: 1) { term_id } }',
         }),
         signal: AbortSignal.timeout(5000),
       });
@@ -87,17 +93,19 @@ export class IntuitionProvider extends ReputationProvider {
   }
 
   async _queryIntuition(tweetUrl) {
-    // Step 1: Find atom for this tweet URL
-    const data = await this._gql(
-      `query FindAtom($uri: String!) {
-        atoms(where: { uri: $uri }, limit: 1) {
-          items { id }
+    // Step 1: Find atom for this tweet URL by label exact match
+    const atomData = await this._gql(
+      `query FindAtom($label: String!) {
+        atoms(where: { label: { _eq: $label } }, limit: 1) {
+          term_id
+          label
+          type
         }
       }`,
-      { uri: tweetUrl },
+      { label: tweetUrl },
     );
 
-    const atom = data.atoms.items[0];
+    const atom = atomData.atoms?.[0];
     if (!atom) {
       return {
         score: 50,
@@ -106,25 +114,21 @@ export class IntuitionProvider extends ReputationProvider {
       };
     }
 
-    const atomId = atom.id;
+    const atomId = atom.term_id;
 
     // Step 2: Get all triples where this atom is the subject
     const triplesData = await this._gql(
-      `query GetTriples($subjectId: numeric!) {
+      `query GetTriples($subjectId: String!) {
         triples(where: { subject_id: { _eq: $subjectId } }) {
-          items {
-            id
-            predicate_id
-            object_id
-            vault { total_shares }
-            counter_vault { total_shares }
-          }
+          term_id
+          predicate { term_id label }
+          object { term_id label }
         }
       }`,
-      { subjectId: Number(atomId) },
+      { subjectId: atomId },
     );
 
-    const triples = triplesData.triples.items || [];
+    const triples = triplesData.triples || [];
 
     // Step 3: Count vouches vs flags using predicate atom IDs from config
     const vouchPredicateId = ATOM_CONFIG.is_trustworthy?.atomId;
@@ -138,15 +142,13 @@ export class IntuitionProvider extends ReputationProvider {
     let flags = 0;
 
     for (const triple of triples) {
-      const pId = String(triple.predicate_id);
-      // Use vault shares as signal strength; at least 1 if triple exists
-      const vaultShares = Number(triple.vault?.total_shares || triple.vault_total || 0);
-      const strength = Math.max(1, vaultShares);
+      const pId = triple.predicate?.term_id;
+      if (!pId) continue;
 
       if (pId === vouchPredicateId) {
-        vouches += strength;
+        vouches += 1;
       } else if (flagPredicateIds.includes(pId)) {
-        flags += strength;
+        flags += 1;
       }
     }
 
@@ -158,7 +160,9 @@ export class IntuitionProvider extends ReputationProvider {
       score = Math.round(Math.min(100, Math.max(0, 50 + (net / total) * 50)));
     }
 
-    logger.info(`[Intuition] ${tweetUrl}: vouches=${vouches}, flags=${flags}, score=${score}, atomId=${atomId}`);
+    logger.info(
+      `[Intuition] ${tweetUrl}: vouches=${vouches}, flags=${flags}, score=${score}, atomId=${atomId}`,
+    );
 
     return {
       score,

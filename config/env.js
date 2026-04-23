@@ -17,7 +17,7 @@ export const ENV = {
   // Intuition Network (testnet)
   INTUITION_CHAIN_ID: 13579,
   INTUITION_RPC_URL: 'https://testnet.rpc.intuition.systems/',
-  INTUITION_GRAPHQL_URL: 'https://testnet.api.intuition.systems/graphql',
+  INTUITION_GRAPHQL_URL: 'https://testnet.intuition.sh/v1/graphql',
   MULTIVAULT_ADDRESS: '0x2Ece8D4dEdcB9918A398528f3fa4688b1d2CAB91',
 
   // Supabase Edge Functions
